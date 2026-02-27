@@ -1,97 +1,115 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
 import os
 
-# إعدادات الصلاحيات
-intents = discord.Intents.default()
-intents.members = True
-intents.voice_states = True
-intents.message_content = True
+# --- الإعدادات الأساسية ---
+class MyBot(commands.Bot):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.members = True
+        intents.voice_states = True
+        intents.message_content = True
+        super().__init__(command_prefix="!", intents=intents)
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+    async def setup_hook(self):
+        # مزامنة أوامر السلاش مع ديسكورد
+        await self.tree.sync()
+        print(f"Synced Slash Commands!")
 
-# تخزين بيانات الرومات: {channel_id: owner_id}
+bot = MyBot()
+
+# تخزين بيانات الرومات مؤقتاً {channel_id: owner_id}
 rooms_data = {}
 
-# --- إعدادات السيرفر (استبدلها بالأرقام الخاصة بك) ---
+# --- أرقام الـ ID (يجب تغييرها) ---
 CATEGORY_ID = 1477063895641493526  # آيدي الفئة
-CREATOR_CHANNEL_ID = 1477064187715780628  # آيدي روم "اضغط للإنشاء"
+CREATOR_CHANNEL_ID = 1477064187715780628  # آيدي روم "أنشئ رومك"
 
-@bot.event
-async def on_ready():
-    print(f'✅ البوت متصل كـ: {bot.user}')
+# --- نافذة منبثقة لتغيير الاسم ---
+class NameModal(discord.ui.Modal, title="تخصيص الروم الصوتي"):
+    room_name = discord.ui.TextInput(label="اسم الروم", placeholder="مثلاً: روم الوناسة", min_length=1, max_length=15)
+    user_limit = discord.ui.TextInput(label="عدد الأشخاص (1-99)", placeholder="5", min_length=1, max_length=2)
 
-@bot.event
-async def on_voice_state_update(member, before, after):
-    # إذا دخل العضو روم الإنشاء
-    if after.channel and after.channel.id == CREATOR_CHANNEL_ID:
-        guild = member.guild
+    async def on_submit(self, interaction: discord.Interaction):
+        # التحقق من أن الرقم صحيح
+        if not self.user_limit.value.isdigit():
+            return await interaction.response.send_message("❌ الرجاء إدخال رقم صحيح للعدد!", ephemeral=True)
+        
+        limit = int(self.user_limit.value)
+        if limit < 0 or limit > 99: limit = 0
+
+        guild = interaction.guild
         category = discord.utils.get(guild.categories, id=CATEGORY_ID)
 
-        # إرسال رسالة خاصة للعضو تسأله عن الإعدادات (أو استخدام قيم افتراضية)
-        # لتسهيل الأمر برمجياً، سنقوم بإنشاء الروم أولاً ثم نطلب منه التعديل
-        
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(connect=True),
-            member: discord.PermissionOverwrite(move_members=True, manage_channels=True)
-        }
-
+        # إنشاء الروم فوراً بعد تعبئة البيانات
         new_channel = await guild.create_voice_channel(
-            name=f"🎙️ | {member.display_name}",
+            name=f"🎙️ | {self.room_name.value}",
             category=category,
-            user_limit=5, # العدد الافتراضي
-            overwrites=overwrites
+            user_limit=limit
         )
 
-        rooms_data[new_channel.id] = member.id
-        await member.move_to(new_channel)
+        rooms_data[new_channel.id] = interaction.user.id
         
-        await new_channel.send(f"مرحباً {member.mention}! أنت ليدر الروم الآن.\n"
-                               f"تستطيع تغيير الاسم بـ: `!name [الاسم]`\n"
-                               f"وتغيير العدد بـ: `!limit [العدد]`\n"
-                               f"لطرد شخص (غير الإداريين): `!vckick @user`")
+        # محاولة نقل العضو إذا كان في روم "أنشئ رومك"
+        if interaction.user.voice and interaction.user.voice.channel.id == CREATOR_CHANNEL_ID:
+            await interaction.user.move_to(new_channel)
+            await interaction.response.send_message(f"✅ تم إنشاء رومك ونقلك إليه: {new_channel.mention}", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"✅ تم إنشاء الروم: {new_channel.mention}. ادخل الآن لتمتلك الصلاحيات.", ephemeral=True)
 
-# --- أمر تغيير اسم الروم ---
-@bot.command()
-async def name(ctx, *, new_name: str):
-    if ctx.author.voice and ctx.author.voice.channel.id in rooms_data:
-        if rooms_data[ctx.author.voice.channel.id] == ctx.author.id:
-            await ctx.author.voice.channel.edit(name=f"🎙️ | {new_name}")
-            await ctx.send(f"✅ تم تغيير اسم الروم إلى: **{new_name}**")
+# --- قائمة الأزرار التي تظهر في الشات ---
+class CreationView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None) # لتبقى الأزرار تعمل دائماً
 
-# --- أمر تغيير عدد الأشخاص ---
-@bot.command()
-async def limit(ctx, num: int):
-    if ctx.author.voice and ctx.author.voice.channel.id in rooms_data:
-        if rooms_data[ctx.author.voice.channel.id] == ctx.author.id:
-            if 0 <= num <= 99:
-                await ctx.author.voice.channel.edit(user_limit=num)
-                await ctx.send(f"✅ تم تغيير الحد الأقصى إلى: **{num}**")
+    @discord.ui.button(label="إنشاء روم خاص بك", style=discord.ButtonStyle.success, custom_id="create_room_btn")
+    async def create_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(NameModal())
 
-# --- أمر الطرد (مع حماية الإداريين) ---
-@bot.command()
-async def vckick(ctx, target: discord.Member):
-    if not ctx.author.voice or ctx.author.voice.channel.id not in rooms_data:
-        return await ctx.send("❌ لست ليدر لروم مؤقت.")
+# --- أوامر السلاش (Slash Commands) ---
 
-    if rooms_data[ctx.author.voice.channel.id] != ctx.author.id:
-        return await ctx.send("⚠️ لست صاحب هذا الروم.")
+# 1. أمر إرسال قائمة الإنشاء (للأدمن فقط يرسلها مرة واحدة في قناة)
+@bot.tree.command(name="setup", description="إرسال قائمة إنشاء الرومات الصوتية")
+@app_commands.checks.has_permissions(administrator=True)
+async def setup(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="✨ نظام الرومات الصوتية المؤقتة",
+        description="اضغط على الزر بالأسفل لتحديد اسم الروم والعدد الذي تريده!\n\n"
+                    "⚠️ **ملاحظة:** سيتم حذف الروم تلقائياً عند خروج الجميع منه.",
+        color=discord.Color.brand_green()
+    )
+    await interaction.response.send_message("تم إرسال القائمة.", ephemeral=True)
+    await interaction.channel.send(embed=embed, view=CreationView())
 
-    # حماية الأدمن ورتبة معينة (مثلاً أي شخص ليس لديه رتبة 'Member')
+# 2. أمر الطرد (vckick) بسلاش
+@bot.tree.command(name="vckick", description="طرد عضو من رومك الصوتي")
+@app_commands.describe(target="العضو المراد طرده")
+async def vckick(interaction: discord.Interaction, target: discord.Member):
+    # التأكد أن المستخدم في روم صوتي وهو صاحبه
+    if not interaction.user.voice or interaction.user.voice.channel.id not in rooms_data:
+        return await interaction.response.send_message("❌ يجب أن تكون داخل رومك الصوتي الخاص!", ephemeral=True)
+    
+    channel_id = interaction.user.voice.channel.id
+    if rooms_data[channel_id] != interaction.user.id:
+        return await interaction.response.send_message("⚠️ أنت لست صاحب هذا الروم!", ephemeral=True)
+
+    # الحماية المطلوبة: منع طرد الأدمن
     if target.guild_permissions.administrator:
-        return await ctx.send("🛡️ لا يمكنك طرد إداري!")
+        return await interaction.response.send_message("🛡️ لا يمكنك طرد إداري السيرفر، لديه حصانة!", ephemeral=True)
 
-    if target.voice and target.voice.channel.id == ctx.author.voice.channel.id:
+    if target.voice and target.voice.channel.id == channel_id:
         await target.move_to(None)
-        await ctx.send(f"✅ تم طرد {target.mention}.")
+        await interaction.response.send_message(f"✅ تم طرد {target.mention} من الروم.")
+    else:
+        await interaction.response.send_message("👤 العضو ليس موجوداً في رومك.", ephemeral=True)
 
-# حذف الروم عند خروج الجميع
+# --- تنظيف الرومات الفارغة ---
 @bot.event
-async def on_voice_state_update_cleanup(member, before, after):
+async def on_voice_state_update(member, before, after):
     if before.channel and before.channel.id in rooms_data:
         if len(before.channel.members) == 0:
             await before.channel.delete()
             del rooms_data[before.channel.id]
 
-# تشغيل البوت
 bot.run(os.getenv("DISCORD_TOKEN"))
