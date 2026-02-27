@@ -14,8 +14,8 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 rooms_data = {}
 
 # --- إعدادات السيرفر (استبدلها بالأرقام الخاصة بك) ---
-CATEGORY_ID = 123456789012345678  # آيدي الفئة
-CREATOR_CHANNEL_ID = 123456789012345678  # آيدي روم "اضغط للإنشاء"
+CATEGORY_ID = 1477063895641493526  # آيدي الفئة
+CREATOR_CHANNEL_ID = 1477064187715780628  # آيدي روم "اضغط للإنشاء"
 
 @bot.event
 async def on_ready():
